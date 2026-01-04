@@ -211,15 +211,20 @@ def {function_name}(result: Dict) -> float:
     ) -> Optional[str]:
         """
         Generate code using Ollama
-        
+
         Args:
             prompt: Description of what to generate
             module_type: Type of module (strategy, evaluator, etc.)
-            
+
         Returns:
             Generated code or None
         """
-        if not self.ollama_manager or not self.ollama_manager.is_available:
+        if not self.ollama_manager:
+            logger.warning("Ollama manager not initialized")
+            return None
+
+        # Ensure availability has been checked at least once
+        if not self.ollama_manager.ensure_availability_checked():
             logger.warning("Ollama not available for code generation")
             return None
         

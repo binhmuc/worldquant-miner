@@ -266,9 +266,9 @@ class TemplateGenerator:
         # Get theme requirements
         theme_requirements = self.theme_manager.get_theme_requirements(region)
         dataset_categories = self.theme_manager.get_required_categories(region)
-        
+
         # Try Ollama first (smart fallback)
-        if use_ollama and self.ollama_manager.is_available:
+        if use_ollama and self.ollama_manager.ensure_availability_checked():
             # Get avoidance context to prevent duplicates
             avoidance_context = self.duplicate_detector.get_avoidance_context(limit=10)
             
@@ -742,9 +742,9 @@ Generate a valid FASTEXPR expression that uses operator(data_field, parameters) 
                     
                     # Step 3: Generate template with placeholders
                     template = self.generate_template_from_prompt(prompt, region=region, use_ollama=True)
-                    
+
                     # If generation failed, try direct Ollama call with placeholder approach
-                    if not template and self.ollama_manager.is_available:
+                    if not template and self.ollama_manager.ensure_availability_checked():
                         template = self.ollama_manager.generate_template(
                             prompt,
                             region=region,
