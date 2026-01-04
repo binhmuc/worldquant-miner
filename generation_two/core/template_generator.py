@@ -77,29 +77,30 @@ class TemplateGenerator:
     def setup_auth(self):
         """Setup authentication for WorldQuant Brain API with session persistence"""
         try:
-            from requests.auth import HTTPBasicAuth
-            
             with open(self.credentials_path, 'r') as f:
-                credentials = json.loads(f.read().strip())
-            
-            username = credentials[0]
-            password = credentials[1]
-            
-            # Log credentials (masked for security)
-            logger.info(f"Authenticating with username: {username}")
-            logger.debug(f"Password length: {len(password)} characters")
-            
-            # Set auth on session itself to persist (like stone_age does)
-            # This ensures auth is maintained for all requests
-            self.sess.auth = HTTPBasicAuth(username, password)
-            
-            # Authenticate with WorldQuant Brain using HTTPBasicAuth (same as v2)
-            auth_response = self.sess.post(
-                'https://api.worldquantbrain.com/authentication',
-                auth=HTTPBasicAuth(username, password)  # Also pass explicitly for this request
-            )
-            
-            if auth_response.status_code == 201:
+                cookie_string = f.read().strip()
+
+            # Log cookie (masked for security)
+            logger.info(f"Loading cookie from file")
+            logger.debug(f"Cookie length: {len(cookie_string)} characters")
+
+            # Parse cookie string and set it in the session
+            # The cookie string should be in the format: "key1=value1; key2=value2; ..."
+            cookie_dict = {}
+            for cookie_part in cookie_string.split(';'):
+                cookie_part = cookie_part.strip()
+                if '=' in cookie_part:
+                    key, value = cookie_part.split('=', 1)
+                    cookie_dict[key.strip()] = value.strip()
+
+            # Set cookies for the WorldQuant Brain domain
+            for key, value in cookie_dict.items():
+                self.sess.cookies.set(key, value, domain='worldquantbrain.com')
+
+            # Verify authentication by making a test request
+            test_response = self.sess.get('https://api.worldquantbrain.com/users/self')
+
+            if test_response.status_code == 200:
                 logger.info("✅ Authentication successful")
                 
                 # Set session headers for all future requests (like v2 and stone_age do)
@@ -114,25 +115,25 @@ class TemplateGenerator:
                     for cookie in self.sess.cookies:
                         logger.info(f"  Cookie: {cookie.name} (domain: {cookie.domain}, path: {cookie.path})")
                 else:
-                    logger.warning("⚠️ No cookies set after authentication - session may not persist")
-                
-                # Check for session token in headers (like v2 does)
-                session_token = auth_response.headers.get('X-WQB-Session-Token')
+                    logger.warning("⚠️ No cookies set - session may not persist")
+
+                # Check for session token in headers
+                session_token = test_response.headers.get('X-WQB-Session-Token')
                 if session_token:
                     logger.info(f"Session token received: {session_token[:20]}...")
                     # Store in session headers for future requests
                     self.sess.headers.update({'X-WQB-Session-Token': session_token})
-                
+
                 # Verify session works by making a test GET request
-                test_response = self.sess.get('https://api.worldquantbrain.com/operators', params={'limit': 1})
-                if test_response.status_code == 200:
+                verify_response = self.sess.get('https://api.worldquantbrain.com/operators', params={'limit': 1})
+                if verify_response.status_code == 200:
                     logger.info("✅ Session verified - authenticated requests work")
                 else:
-                    logger.warning(f"⚠️ Session verification failed: {test_response.status_code} - {test_response.text}")
+                    logger.warning(f"⚠️ Session verification failed: {verify_response.status_code} - {verify_response.text}")
             else:
-                logger.error(f"❌ Authentication failed: {auth_response.status_code}")
-                logger.error(f"Response: {auth_response.text}")
-                raise Exception(f"Authentication failed: {auth_response.status_code}")
+                logger.error(f"❌ Authentication failed: {test_response.status_code}")
+                logger.error(f"Response: {test_response.text}")
+                raise Exception(f"Authentication failed: {test_response.status_code}")
                 
         except Exception as e:
             logger.error(f"❌ Failed to setup authentication: {e}")

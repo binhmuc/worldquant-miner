@@ -21,35 +21,33 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Credentials:
     """Secure credential container (never logged or stored in code)"""
-    username: str
-    password: str
-    
+    cookie: str
+
     def to_dict(self) -> Dict[str, str]:
         """Convert to dictionary (for API calls only)"""
         return {
-            'username': self.username,
-            'password': self.password
+            'cookie': self.cookie
         }
-    
+
     def validate(self) -> bool:
         """Basic validation"""
-        return bool(self.username and self.password and len(self.username) > 0 and len(self.password) > 0)
+        return bool(self.cookie and len(self.cookie) > 0)
 
 
 class CredentialManager:
     """
     Secure credential manager
-    
+
     Features:
-    - Loads from credential.txt or credentials.txt
+    - Loads from cookie.txt
     - Prompts for login if file not found
     - Validates credentials before use
     - NEVER embeds credentials in code
     - Stores credentials only in memory
     """
-    
+
     # Possible credential file names (checked in order)
-    CREDENTIAL_FILE_NAMES = ['credential.txt', 'credentials.txt']
+    CREDENTIAL_FILE_NAMES = ['cookie.txt']
     
     def __init__(self, base_path: Optional[str] = None):
         """
@@ -92,66 +90,52 @@ class CredentialManager:
     def load_from_file(self, file_path: Optional[Path] = None) -> bool:
         """
         Load credentials from file
-        
+
         Args:
-            file_path: Path to credential file. If None, searches automatically.
-        
+            file_path: Path to cookie file. If None, searches automatically.
+
         Returns:
             True if credentials loaded successfully, False otherwise
         """
         if file_path is None:
             file_path = self.find_credential_file()
-        
+
         if file_path is None:
-            logger.error("No credential file specified or found")
+            logger.error("No cookie file specified or found")
             return False
-        
+
         if not file_path.exists():
-            logger.error(f"Credential file not found: {file_path}")
+            logger.error(f"Cookie file not found: {file_path}")
             return False
-        
+
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-            
-            # Try JSON format first: ["username", "password"]
-            try:
-                creds_list = json.loads(content)
-                if isinstance(creds_list, list) and len(creds_list) >= 2:
-                    username = creds_list[0]
-                    password = creds_list[1]
-                else:
-                    raise ValueError("Invalid credential format")
-            except (json.JSONDecodeError, ValueError):
-                # Try line-separated format: username\npassword
-                lines = content.split('\n')
-                if len(lines) >= 2:
-                    username = lines[0].strip()
-                    password = lines[1].strip()
-                else:
-                    raise ValueError("Invalid credential format")
-            
-            self.credentials = Credentials(username=username, password=password)
-            
+                cookie = f.read().strip()
+
+            if not cookie:
+                raise ValueError("Cookie file is empty")
+
+            self.credentials = Credentials(cookie=cookie)
+
             if not self.credentials.validate():
-                logger.error("Invalid credentials: empty username or password")
+                logger.error("Invalid credentials: empty cookie")
                 self.credentials = None
                 return False
-            
-            logger.info(f"✅ Credentials loaded from: {file_path}")
-            logger.info(f"   Username: {self.credentials.username}")
-            # NEVER log password
+
+            logger.info(f"✅ Cookie loaded from: {file_path}")
+            logger.info(f"   Cookie length: {len(self.credentials.cookie)} characters")
+            # NEVER log full cookie
             return True
-            
+
         except Exception as e:
-            logger.error(f"Failed to load credentials from {file_path}: {e}")
+            logger.error(f"Failed to load cookie from {file_path}: {e}")
             self.credentials = None
             return False
     
     def prompt_for_credentials(self) -> bool:
         """
         Prompt user for credentials (interactive)
-        
+
         Returns:
             True if credentials entered, False if cancelled
         """
@@ -159,30 +143,25 @@ class CredentialManager:
             print("\n" + "="*60)
             print("🔐 WORLDQUANT BRAIN AUTHENTICATION REQUIRED")
             print("="*60)
-            print("Please enter your WorldQuant Brain credentials:")
+            print("Please enter your WorldQuant Brain cookie string:")
+            print("(You can find this in your browser's developer tools)")
             print()
-            
-            username = input("Username (email): ").strip()
-            if not username:
-                logger.warning("Username not provided")
+
+            cookie = input("Cookie string: ").strip()
+            if not cookie:
+                logger.warning("Cookie not provided")
                 return False
-            
-            # Use getpass to hide password input
-            password = getpass("Password: ").strip()
-            if not password:
-                logger.warning("Password not provided")
-                return False
-            
-            self.credentials = Credentials(username=username, password=password)
-            
+
+            self.credentials = Credentials(cookie=cookie)
+
             if not self.credentials.validate():
-                logger.error("Invalid credentials: empty username or password")
+                logger.error("Invalid credentials: empty cookie")
                 self.credentials = None
                 return False
-            
-            logger.info(f"✅ Credentials entered (username: {self.credentials.username})")
+
+            logger.info(f"✅ Cookie entered ({len(self.credentials.cookie)} characters)")
             return True
-            
+
         except (KeyboardInterrupt, EOFError):
             logger.warning("Credential entry cancelled by user")
             self.credentials = None
@@ -195,44 +174,54 @@ class CredentialManager:
     def validate_credentials(self) -> bool:
         """
         Validate credentials by attempting authentication
-        
+
         Returns:
             True if credentials are valid, False otherwise
         """
         if not self.credentials or not self.credentials.validate():
             logger.error("No valid credentials to validate")
             return False
-        
+
         try:
             # Create a temporary session for validation
             test_session = requests.Session()
-            
-            from requests.auth import HTTPBasicAuth
-            auth = HTTPBasicAuth(self.credentials.username, self.credentials.password)
-            
-            # Attempt authentication
-            logger.info(f"Validating credentials for: {self.credentials.username}")
-            response = test_session.post(
-                'https://api.worldquantbrain.com/authentication',
-                auth=auth,
+
+            # Set cookie in session
+            logger.info(f"Validating cookie ({len(self.credentials.cookie)} characters)")
+
+            # Parse cookie string and set it in the session
+            # The cookie string should be in the format: "key1=value1; key2=value2; ..."
+            cookie_dict = {}
+            for cookie_part in self.credentials.cookie.split(';'):
+                cookie_part = cookie_part.strip()
+                if '=' in cookie_part:
+                    key, value = cookie_part.split('=', 1)
+                    cookie_dict[key.strip()] = value.strip()
+
+            # Set cookies for the WorldQuant Brain domain
+            for key, value in cookie_dict.items():
+                test_session.cookies.set(key, value, domain='worldquantbrain.com')
+
+            # Test the cookie by making a request to the API
+            response = test_session.get(
+                'https://api.worldquantbrain.com/users/self',
                 timeout=10
             )
-            
-            if response.status_code == 201:
-                logger.info("✅ Credentials validated successfully")
+
+            if response.status_code == 200:
+                logger.info("✅ Cookie validated successfully")
                 self.authenticated = True
-                
+
                 # Store session for reuse
                 self.session = test_session
-                self.session.auth = auth
-                
+
                 return True
             else:
                 logger.error(f"❌ Authentication failed: {response.status_code}")
                 logger.error(f"   Response: {response.text[:200]}")
                 self.authenticated = False
                 return False
-                
+
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Network error during credential validation: {e}")
             self.authenticated = False
@@ -301,8 +290,8 @@ class CredentialManager:
     def clear_credentials(self):
         """Clear credentials from memory (security)"""
         if self.credentials:
-            # Overwrite password in memory (best effort)
-            self.credentials.password = "***CLEARED***"
+            # Overwrite cookie in memory (best effort)
+            self.credentials.cookie = "***CLEARED***"
         self.credentials = None
         self.authenticated = False
         self.session = None

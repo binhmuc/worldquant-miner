@@ -52,40 +52,37 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("Starting GUI initialization...")
     
-    # Get credential path (optional - will prompt if not found)
-    credential_path = None
-    logger.info("Searching for credential file...")
+    # Get cookie path (optional - will prompt if not found)
+    cookie_path = None
+    logger.info("Searching for cookie file...")
     if len(sys.argv) > 1:
-        credential_path = sys.argv[1]
-        logger.info(f"  Credential path from argument: {credential_path}")
+        cookie_path = sys.argv[1]
+        logger.info(f"  Cookie path from argument: {cookie_path}")
     else:
-        # Try to find credential file in common locations
+        # Try to find cookie file in common locations
         search_paths = [
             Path(__file__).parent.parent,  # generation_two/
             Path(__file__).parent.parent.parent,  # worldquant-miner/
             Path.cwd(),  # Current directory
         ]
-        
+
         logger.info(f"  Searching in {len(search_paths)} locations...")
         for search_path in search_paths:
             logger.info(f"    Checking: {search_path}")
-            for filename in ['credential.txt', 'credentials.txt']:
-                cred_file = search_path / filename
-                if cred_file.exists():
-                    credential_path = str(cred_file)
-                    logger.info(f"  ✅ Found credential file: {credential_path}")
-                    break
-            if credential_path:
+            cookie_file = search_path / 'cookie.txt'
+            if cookie_file.exists():
+                cookie_path = str(cookie_file)
+                logger.info(f"  ✅ Found cookie file: {cookie_path}")
                 break
-        
-        if not credential_path:
-            logger.warning("  ⚠️  No credential file found - will prompt for login")
+
+        if not cookie_path:
+            logger.warning("  ⚠️  No cookie file found - will prompt for login")
     
-    # Initialize GUI (will prompt for login if credentials not found)
+    # Initialize GUI (will prompt for login if cookie not found)
     logger.info("=" * 60)
     logger.info("Initializing CyberpunkGUI...")
     try:
-        app = CyberpunkGUI(credentials_path=credential_path)
+        app = CyberpunkGUI(credentials_path=cookie_path)
         logger.info("  ✅ CyberpunkGUI initialized")
     except Exception as e:
         logger.error(f"  ❌ Failed to initialize CyberpunkGUI: {e}", exc_info=True)

@@ -141,12 +141,12 @@ class CyberpunkGUI:
         logger.info("No valid credentials found, showing login dialog...")
         from .components.login_dialog import LoginDialog
         
-        def validate_login(username: str, password: str) -> bool:
+        def validate_login(cookie: str) -> bool:
             """Validate login credentials"""
             from ..core.credential_manager import Credentials
-            temp_creds = Credentials(username=username, password=password)
+            temp_creds = Credentials(cookie=cookie)
             self.credential_manager.credentials = temp_creds
-            
+
             if self.credential_manager.validate_credentials():
                 logger.info("✅ Authentication successful from dialog")
                 self.authenticated = True
@@ -174,20 +174,20 @@ class CyberpunkGUI:
                 logger.error("No authenticated session available")
                 return
             
-            # Create temporary credential file for generator (in memory approach would be better)
-            # For now, we'll pass credentials directly if possible
+            # Create temporary cookie file for generator (in memory approach would be better)
+            # For now, we'll pass cookie directly if possible
             # Note: This is a workaround - ideally generator should accept session directly
             import tempfile
-            temp_cred_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
+            temp_cookie_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
             creds = self.credential_manager.get_credentials()
-            json.dump([creds.username, creds.password], temp_cred_file)
-            temp_cred_file.close()
-            
-            self.generator = EnhancedTemplateGeneratorV3(credentials_path=temp_cred_file.name)
+            temp_cookie_file.write(creds.cookie)
+            temp_cookie_file.close()
+
+            self.generator = EnhancedTemplateGeneratorV3(credentials_path=temp_cookie_file.name)
             
             # Clean up temp file after generator reads it
             try:
-                os.unlink(temp_cred_file.name)
+                os.unlink(temp_cookie_file.name)
             except:
                 pass
                 
