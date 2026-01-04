@@ -246,7 +246,19 @@ Requirements:
 Return only the Python code:"""
         
         code = self.ollama_manager.generate(user_prompt, system_prompt, temperature=0.3, max_tokens=1000)
-        
+        # Clean up code formatting - remove markdown code blocks if present
+        if code and isinstance(code, str):
+            # Remove markdown code blocks
+            code = code.strip()
+            if code.startswith('```python'):
+                code = code[9:]  # Remove '```python'
+            elif code.startswith('```'):
+                code = code[3:]  # Remove '```'
+            
+            if code.endswith('```'):
+                code = code[:-3]  # Remove trailing '```'
+            
+            code = code.strip()
         if code:
             # Validate syntax
             try:
