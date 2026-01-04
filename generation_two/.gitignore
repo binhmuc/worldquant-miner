@@ -3,7 +3,6 @@ credential.txt
 credentials.txt
 credential.json
 credentials.json
-cookie.txt
 *.pem
 *.key
 .env
