@@ -8,7 +8,7 @@ services:
     ports:
       - "11434:11434"  # Ollama API port
     volumes:
-      - ./credential.txt:/app/credential.txt:ro  # Mount credentials
+      - ./cookie.txt:/app/cookie.txt:ro  # Mount cookie authentication
       - ./results:/app/results  # Mount results directory
       - ./logs:/app/logs  # Mount logs directory
       - .:/app  # Mount current directory for hopeful_alphas.json sharing
@@ -59,7 +59,7 @@ services:
     container_name: machine-miner-gpu
     runtime: nvidia
     volumes:
-      - ./credential.txt:/app/credential.txt:ro
+      - ./cookie.txt:/app/cookie.txt:ro
       - ./results:/app/results
       - ./logs:/app/logs
       - .:/app
@@ -79,7 +79,7 @@ services:
           memory: 8G
           cpus: '2.0'
     restart: unless-stopped
-    command: ["python", "machine_miner.py", "--credentials", "/app/credential.txt", "--region", "USA", "--universe", "TOP3000"]
+    command: ["python", "machine_miner.py", "--credentials", "/app/cookie.txt", "--region", "USA", "--universe", "TOP3000"]
     depends_on:
       - naive-ollma
     networks:
@@ -94,7 +94,7 @@ services:
     volumes:
       - ./results:/app/results
       - ./logs:/app/logs
-      - ./credential.txt:/app/credential.txt:ro
+      - ./cookie.txt:/app/cookie.txt:ro
       - .:/app  # Mount current directory for hopeful_alphas.json sharing
     environment:
       - FLASK_ENV=production
