@@ -293,9 +293,22 @@ class OllamaManager:
         """Determine if health check is needed"""
         if self.last_check is None:
             return True
-        
+
         elapsed = (datetime.now() - self.last_check).total_seconds()
         return elapsed > self.health_check_interval
+
+    def ensure_availability_checked(self) -> bool:
+        """
+        Ensure availability has been checked at least once.
+        Call this before checking is_available flag.
+
+        Returns:
+            bool: True if Ollama is available, False otherwise
+        """
+        if self.last_check is None:
+            logger.debug("First availability check - checking Ollama status...")
+            return self._check_availability()
+        return self.is_available
     
     def _enforce_rate_limit(self):
         """Enforce rate limiting (per-thread to allow concurrency)"""

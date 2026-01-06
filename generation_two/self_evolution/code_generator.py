@@ -211,15 +211,20 @@ def {function_name}(result: Dict) -> float:
     ) -> Optional[str]:
         """
         Generate code using Ollama
-        
+
         Args:
             prompt: Description of what to generate
             module_type: Type of module (strategy, evaluator, etc.)
-            
+
         Returns:
             Generated code or None
         """
-        if not self.ollama_manager or not self.ollama_manager.is_available:
+        if not self.ollama_manager:
+            logger.warning("Ollama manager not initialized")
+            return None
+
+        # Ensure availability has been checked at least once
+        if not self.ollama_manager.ensure_availability_checked():
             logger.warning("Ollama not available for code generation")
             return None
         
@@ -241,7 +246,19 @@ Requirements:
 Return only the Python code:"""
         
         code = self.ollama_manager.generate(user_prompt, system_prompt, temperature=0.3, max_tokens=1000)
-        
+        # Clean up code formatting - remove markdown code blocks if present
+        if code and isinstance(code, str):
+            # Remove markdown code blocks
+            code = code.strip()
+            if code.startswith('```python'):
+                code = code[9:]  # Remove '```python'
+            elif code.startswith('```'):
+                code = code[3:]  # Remove '```'
+            
+            if code.endswith('```'):
+                code = code[:-3]  # Remove trailing '```'
+            
+            code = code.strip()
         if code:
             # Validate syntax
             try:
