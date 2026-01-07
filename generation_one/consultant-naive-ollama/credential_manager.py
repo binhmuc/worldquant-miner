@@ -122,7 +122,7 @@ class CredentialManager:
                 self.credentials = None
                 return False
 
-            logger.info(f"✅ Cookie loaded from: {file_path}")
+            logger.info(f"[AUTH] Cookie loaded from: {file_path}")
             logger.info(f"   Cookie length: {len(self.credentials.cookie)} characters")
             # NEVER log full cookie
             return True
@@ -141,7 +141,7 @@ class CredentialManager:
         """
         try:
             print("\n" + "="*60)
-            print("🔐 WORLDQUANT BRAIN AUTHENTICATION REQUIRED")
+            print("[AUTH] WORLDQUANT BRAIN AUTHENTICATION REQUIRED")
             print("="*60)
             print("Please enter your WorldQuant Brain cookie string:")
             print("(You can find this in your browser's developer tools)")
@@ -159,7 +159,7 @@ class CredentialManager:
                 self.credentials = None
                 return False
 
-            logger.info(f"✅ Cookie entered ({len(self.credentials.cookie)} characters)")
+            logger.info(f"[AUTH] Cookie entered ({len(self.credentials.cookie)} characters)")
             return True
 
         except (KeyboardInterrupt, EOFError):
@@ -202,6 +202,12 @@ class CredentialManager:
             for key, value in cookie_dict.items():
                 test_session.cookies.set(key, value, domain='worldquantbrain.com')
 
+            # Set required headers for WorldQuant Brain API
+            test_session.headers.update({
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            })
+
             # Test the cookie by making a request to the API
             response = test_session.get(
                 'https://api.worldquantbrain.com/users/self',
@@ -209,7 +215,7 @@ class CredentialManager:
             )
 
             if response.status_code == 200:
-                logger.info("✅ Cookie validated successfully")
+                logger.info("[AUTH] Cookie validated successfully")
                 self.authenticated = True
 
                 # Store session for reuse
@@ -217,17 +223,17 @@ class CredentialManager:
 
                 return True
             else:
-                logger.error(f"❌ Authentication failed: {response.status_code}")
+                logger.error(f"[AUTH] Authentication failed: {response.status_code}")
                 logger.error(f"   Response: {response.text[:200]}")
                 self.authenticated = False
                 return False
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Network error during credential validation: {e}")
+            logger.error(f"[AUTH] Network error during credential validation: {e}")
             self.authenticated = False
             return False
         except Exception as e:
-            logger.error(f"❌ Unexpected error during credential validation: {e}")
+            logger.error(f"[AUTH] Unexpected error during credential validation: {e}")
             self.authenticated = False
             return False
 
@@ -284,7 +290,7 @@ class CredentialManager:
                 else:
                     logger.error("Entered credentials failed validation")
 
-        logger.error("❌ Authentication failed - cannot proceed without valid credentials")
+        logger.error("[AUTH] Authentication failed - cannot proceed without valid credentials")
         return False
 
     def clear_credentials(self):

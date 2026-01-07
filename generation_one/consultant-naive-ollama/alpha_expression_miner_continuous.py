@@ -145,8 +145,8 @@ class ContinuousAlphaExpressionMiner:
 
 def main():
     parser = argparse.ArgumentParser(description='Continuous Alpha Expression Miner')
-    parser.add_argument('--credentials', type=str, default='./credential.txt',
-                      help='Path to credentials file (default: ./credential.txt)')
+    parser.add_argument('--credentials', type=str, default='./cookie.txt',
+                      help='Path to cookie file (default: ./cookie.txt)')
     parser.add_argument('--ollama-url', type=str, default='http://localhost:11434',
                       help='Ollama API URL (default: http://localhost:11434)')
     parser.add_argument('--mining-interval', type=int, default=6,

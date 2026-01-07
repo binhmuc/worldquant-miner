@@ -14,6 +14,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import queue
 from dataclasses import dataclass
+from credential_manager import CredentialManager
 
 # Configure logging
 logging.basicConfig(
@@ -46,7 +47,7 @@ class ModelFleetManager:
         # Model fleet ordered by priority (largest to smallest)
         # Optimized for RTX A4000 (16GB VRAM) with DeepSeek-R1 reasoning models
         self.model_fleet = [
-            ModelInfo("deepseek-r1:8b", 5200, 1, "DeepSeek-R1 8B - Reasoning model (RTX A4000 optimized)"),
+            ModelInfo("deepseek-r1:14b", 5200, 1, "DeepSeek-R1 8B - Reasoning model (RTX A4000 optimized)"),
             ModelInfo("deepseek-r1:7b", 4700, 2, "DeepSeek-R1 7B - Reasoning model"),
             ModelInfo("deepseek-r1:1.5b", 1100, 3, "DeepSeek-R1 1.5B - Reasoning model"),
             ModelInfo("llama3:3b", 2048, 4, "Llama 3.2 3B - Fallback model"),
@@ -255,11 +256,11 @@ class ModelFleetManager:
         return self.update_alpha_generator_config(self.get_current_model().name)
 
 class AlphaOrchestrator:
-    def __init__(self, credentials_path: str, ollama_url: str = "http://localhost:11434"):
-        self.sess = requests.Session()
+    def __init__(self, credentials_path: str = None, ollama_url: str = "http://localhost:11434"):
         self.credentials_path = credentials_path
         self.ollama_url = ollama_url
-        self.setup_auth(credentials_path)
+        self.credential_manager = CredentialManager()
+        self.sess = self.setup_auth(credentials_path)
         self.last_submission_date = None
         self.submission_log_file = "submission_log.json"
         self.load_submission_history()
@@ -287,22 +288,29 @@ class AlphaOrchestrator:
         self.last_log_activity = time.time()
         self.log_inactivity_timeout = 40  # 5 minutes of inactivity triggers reset
         
-    def setup_auth(self, credentials_path: str) -> None:
-        """Set up authentication with WorldQuant Brain."""
-        logger.info(f"Loading credentials from {credentials_path}")
-        with open(credentials_path) as f:
-            credentials = json.load(f)
-        
-        username, password = credentials
-        self.sess.auth = HTTPBasicAuth(username, password)
-        
-        logger.info("Authenticating with WorldQuant Brain...")
-        response = self.sess.post('https://api.worldquantbrain.com/authentication')
-        logger.info(f"Authentication response status: {response.status_code}")
-        
-        if response.status_code != 201:
-            raise Exception(f"Authentication failed: {response.text}")
-        logger.info("Authentication successful")
+    def setup_auth(self, credentials_path: str = None) -> requests.Session:
+        """Set up authentication with WorldQuant Brain using cookie-based auth."""
+        logger.info("Setting up authentication with WorldQuant Brain...")
+
+        # Try to authenticate using cookie
+        if credentials_path:
+            logger.info(f"Loading credentials from {credentials_path}")
+            from pathlib import Path
+            if self.credential_manager.load_from_file(Path(credentials_path)):
+                if self.credential_manager.validate_credentials():
+                    logger.info("[AUTH] Authentication successful using cookie file")
+                    return self.credential_manager.get_session()
+                else:
+                    logger.error("[AUTH] Cookie validation failed")
+            else:
+                logger.error(f"[AUTH] Failed to load cookie from {credentials_path}")
+
+        # Try auto-authentication (looks for cookie.txt automatically)
+        if self.credential_manager.authenticate(auto_load=True, auto_prompt=True):
+            logger.info("[AUTH] Authentication successful")
+            return self.credential_manager.get_session()
+        else:
+            raise Exception("[AUTH] Authentication failed - cannot proceed without valid credentials")
 
     def load_submission_history(self):
         """Load submission history to track daily submissions."""
@@ -359,7 +367,8 @@ class AlphaOrchestrator:
     def stop_log_monitoring(self):
         """Stop log monitoring."""
         self.log_monitoring_active = False
-        if self.log_monitor_thread:
+        # Don't join if called from the monitoring thread itself
+        if self.log_monitor_thread and threading.current_thread() != self.log_monitor_thread:
             self.log_monitor_thread.join(timeout=5)
         logger.info("Stopped log monitoring")
 
@@ -430,39 +439,39 @@ class AlphaOrchestrator:
     def _trigger_log_inactivity_reset(self):
         """Trigger a complete application reset due to log inactivity."""
         try:
-            logger.warning("🔄 Triggering application reset due to log inactivity")
-            
-            # Stop all monitoring
+            logger.warning("[RESET] Triggering application reset due to log inactivity")
+
+            # Stop all monitoring (but don't join threads from within themselves)
+            self.log_monitoring_active = False
             self.stop_vram_monitoring()
-            self.stop_log_monitoring()
-            
+
             # Reset model fleet to largest model
             self.model_fleet_manager.reset_to_largest_model()
-            
+
             # Stop all processes
             self.stop_processes()
-            
+
             # Wait a moment for processes to terminate
             time.sleep(10)
-            
+
             # Restart everything
-            logger.info("🔄 Restarting all processes after log inactivity reset")
-            
+            logger.info("[RESET] Restarting all processes after log inactivity reset")
+
             # Restart alpha generator
             self.start_alpha_generator_continuous(batch_size=10, sleep_time=30)
-            
+
             # Restart monitoring
             self.start_vram_monitoring()
             self.start_log_monitoring()
-            
+
             # Reset timers
             self.last_restart_time = time.time()
             self.last_log_activity = time.time()
-            
-            logger.info("✅ Application reset completed after log inactivity")
-            
+
+            logger.info("[SUCCESS] Application reset completed after log inactivity")
+
         except Exception as e:
-            logger.error(f"❌ Error during log inactivity reset: {e}")
+            logger.error(f"[ERROR] Error during log inactivity reset: {e}")
 
     def _vram_monitor_loop(self):
         """VRAM monitoring loop that checks for errors and handles model downgrading."""
@@ -538,7 +547,7 @@ class AlphaOrchestrator:
         if not self.restart_thread or not self.restart_thread.is_alive():
             self.restart_thread = threading.Thread(target=self._restart_monitor_loop, daemon=True)
             self.restart_thread.start()
-            logger.info("🔄 Restart monitoring started (30-minute intervals)")
+            logger.info("[RESTART] Restart monitoring started (30-minute intervals)")
     
     def _restart_monitor_loop(self):
         """Monitor and restart processes every 30 minutes."""
@@ -653,7 +662,7 @@ class AlphaOrchestrator:
         try:
             # Run the alpha submitter as a subprocess
             result = subprocess.run([
-                sys.executable, 'successful_alpha_submitter.py',
+                sys.executable, 'improved_alpha_submitter.py',
                 '--batch-size', str(batch_size),
                 '--auto-mode'  # Run in automated mode
             ], capture_output=True, text=True, timeout=600)
@@ -755,33 +764,33 @@ class AlphaOrchestrator:
 
     def restart_all_processes(self):
         """Restart all running processes to prevent stuck jobs."""
-        logger.info("🔄 Restarting all processes to prevent stuck jobs...")
-        
+        logger.info("[RESTART] Restarting all processes to prevent stuck jobs...")
+
         # Stop current processes
         self.stop_processes()
-        
+
         # Wait a moment for processes to terminate
         time.sleep(5)
-        
+
         # Restart processes
         try:
             # Restart alpha generator
-            logger.info("🔄 Restarting alpha generator...")
+            logger.info("[RESTART] Restarting alpha generator...")
             self.start_alpha_generator_continuous(batch_size=10, sleep_time=30)
-            
+
             # Restart VRAM monitoring
-            logger.info("🔄 Restarting VRAM monitoring...")
+            logger.info("[RESTART] Restarting VRAM monitoring...")
             self.start_vram_monitoring()
-            
+
             # Restart log monitoring
-            logger.info("🔄 Restarting log monitoring...")
+            logger.info("[RESTART] Restarting log monitoring...")
             self.start_log_monitoring()
-            
-            logger.info("✅ All processes restarted successfully")
+
+            logger.info("[SUCCESS] All processes restarted successfully")
             self.last_restart_time = time.time()
-            
+
         except Exception as e:
-            logger.error(f"❌ Error during restart: {e}")
+            logger.error(f"[ERROR] Error during restart: {e}")
     
     def stop_processes(self):
         """Stop all running processes."""
@@ -893,8 +902,8 @@ class AlphaOrchestrator:
 
 def main():
     parser = argparse.ArgumentParser(description='Alpha Orchestrator - Manage alpha generation, mining, and submission')
-    parser.add_argument('--credentials', type=str, default='./credential.txt',
-                      help='Path to credentials file (default: ./credential.txt)')
+    parser.add_argument('--credentials', type=str, default='./cookie.txt',
+                      help='Path to cookie file (default: ./cookie.txt)')
     parser.add_argument('--ollama-url', type=str, default='http://localhost:11434',
                       help='Ollama API URL (default: http://localhost:11434)')
     parser.add_argument('--mode', type=str, choices=['daily', 'continuous', 'miner', 'submitter', 'generator', 'fleet-status', 'fleet-reset', 'fleet-downgrade', 'fleet-reset-app', 'restart'],

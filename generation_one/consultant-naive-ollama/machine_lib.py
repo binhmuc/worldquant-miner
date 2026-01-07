@@ -21,31 +21,44 @@ group_ops = ["group_rank", "group_sum", "group_max", "group_mean", "group_median
 twin_field_ops = ["ts_corr", "ts_covariance", "ts_co_kurtosis", "ts_co_skewness", "ts_theilsen"]
 
 class WorldQuantBrain:
-    def __init__(self, username: str, password: str):
+    def __init__(self, username: str = None, password: str = None, session: requests.Session = None):
         self.username = username
         self.password = password
-        self.session = None
+        self.session = session  # Allow passing pre-authenticated session
         self.basic_ops = ["log", "sqrt", "reverse", "inverse", "rank", "zscore", "log_diff", "s_log_1p",
                          'fraction', 'quantile', "normalize", "scale_down"]
         self.ts_ops = ["ts_rank", "ts_zscore", "ts_delta", "ts_sum", "ts_product",
                       "ts_ir", "ts_std_dev", "ts_mean", "ts_arg_min", "ts_arg_max", "ts_min_diff",
-                      "ts_max_diff", "ts_returns", "ts_scale", "ts_skewness", "ts_kurtosis",  
+                      "ts_max_diff", "ts_returns", "ts_scale", "ts_skewness", "ts_kurtosis",
                       "ts_quantile"]
         self.ops_set = self.basic_ops + self.ts_ops + arsenal + group_ops
         # Add list of known inaccessible operators
         self.inaccessible_ops = ["log_diff", "s_log_1p", "fraction", "quantile"]
-        self.login()
+
+        # Only login if session not provided
+        if self.session is None:
+            if username and password:
+                self.login()
+            else:
+                raise ValueError("Either provide username/password or a pre-authenticated session")
 
     def login(self):
         """Initialize or refresh session with WorldQuant Brain."""
+        # If we're using cookie-based authentication (no username/password),
+        # we can't re-authenticate, so just skip
+        if self.username is None or self.password is None:
+            logging.warning("Cannot re-authenticate with cookie-based session. Session may have expired.")
+            logging.warning("Please refresh your cookie.txt file if you continue to see authentication errors.")
+            return self.session
+
         logging.info("Authenticating with WorldQuant Brain...")
         self.session = requests.Session()
         self.session.auth = (self.username, self.password)
         response = self.session.post('https://api.worldquantbrain.com/authentication')
-        
+
         if response.status_code != 201:
             raise Exception(f"Authentication failed: {response.text}")
-            
+
         self.session.headers.update({
             'Content-Type': 'application/json',
             'Accept': 'application/json'
@@ -291,7 +304,21 @@ class WorldQuantBrain:
                 f"&instrumentType={instrument_type}" +\
                 f"&region={region}&delay={str(delay)}&universe={universe}&dataset.id={dataset_id}&limit=50" +\
                 "&offset={x}"
-            count = self.session.get(url_template.format(x=0)).json()['count'] 
+            response = self.session.get(url_template.format(x=0))
+            logging.info(f"API Response status: {response.status_code}")
+            if response.status_code != 200:
+                logging.error(f"API Error: {response.text[:500]}")
+                raise Exception(f"API request failed: {response.status_code}")
+
+            response_json = response.json()
+            logging.debug(f"API Response keys: {response_json.keys()}")
+
+            if 'count' not in response_json:
+                logging.error(f"Missing 'count' in response. Keys: {list(response_json.keys())}")
+                logging.error(f"Response: {response.text[:500]}")
+                raise KeyError(f"'count' key not found in API response")
+
+            count = response_json['count'] 
             
         else:
             url_template = "https://api.worldquantbrain.com/data-fields?" +\
@@ -303,8 +330,31 @@ class WorldQuantBrain:
         
         datafields_list = []
         for x in range(0, count, 50):
-            datafields = self.session.get(url_template.format(x=x))
-            datafields_list.append(datafields.json()['results'])
+            # Add delay to respect rate limits
+            if x > 0:
+                time.sleep(1)  # Wait 1 second between requests to avoid rate limiting
+
+            response = self.session.get(url_template.format(x=x))
+
+            # Handle rate limiting with retry
+            if response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', 5))
+                logging.warning(f"Rate limited at offset {x}, waiting {retry_after} seconds...")
+                time.sleep(retry_after)
+                response = self.session.get(url_template.format(x=x))
+
+            if response.status_code != 200:
+                logging.error(f"Failed to fetch datafields at offset {x}: {response.status_code}")
+                logging.error(f"Response: {response.text[:500]}")
+                continue
+
+            response_json = response.json()
+            if 'results' not in response_json:
+                logging.error(f"Missing 'results' in response at offset {x}. Keys: {list(response_json.keys())}")
+                logging.error(f"Response: {response.text[:500]}")
+                continue
+
+            datafields_list.append(response_json['results'])
      
         datafields_list_flat = [item for sublist in datafields_list for item in sublist]
      

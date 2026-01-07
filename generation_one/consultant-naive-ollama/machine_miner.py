@@ -7,6 +7,8 @@ import os
 from itertools import product
 import requests
 import argparse
+from pathlib import Path
+from credential_manager import CredentialManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,8 +20,8 @@ logging.basicConfig(
 )
 
 class MachineMiner:
-    def __init__(self, username: str, password: str):
-        self.brain = ml.WorldQuantBrain(username, password)
+    def __init__(self, session: requests.Session):
+        self.brain = ml.WorldQuantBrain(session=session)
         self.alpha_bag = []
         self.gold_bag = []
         
@@ -128,24 +130,34 @@ class MachineMiner:
 
 def main():
     parser = argparse.ArgumentParser(description='Mine alphas using WorldQuant Brain')
-    parser.add_argument('--credentials', type=str, default='./credential.txt',
-                      help='Path to credentials file (default: ./credential.txt)')
+    parser.add_argument('--credentials', type=str, default='./cookie.txt',
+                      help='Path to cookie file (default: ./cookie.txt)')
     parser.add_argument('--region', default='USA', help='Region to mine alphas for')
     parser.add_argument('--universe', default='TOP3000', help='Universe to mine alphas for')
-    
+
     args = parser.parse_args()
-    
-    # Read credentials from file
+
+    # Set up authentication using CredentialManager
+    credential_manager = CredentialManager()
+
     try:
-        with open(args.credentials, 'r') as f:
-            credentials = json.loads(f.read())
-            username = credentials[0]
-            password = credentials[1]
+        # Load cookie from file
+        logging.info(f"Loading credentials from {args.credentials}")
+        if credential_manager.load_from_file(Path(args.credentials)):
+            if credential_manager.validate_credentials():
+                logging.info("[AUTH] Authentication successful using cookie file")
+                session = credential_manager.get_session()
+            else:
+                logging.error("[AUTH] Cookie validation failed")
+                return 1
+        else:
+            logging.error(f"[AUTH] Failed to load cookie from {args.credentials}")
+            return 1
     except Exception as e:
         logging.error(f"Error reading credentials from {args.credentials}: {e}")
         return 1
-    
-    miner = MachineMiner(username, password)
+
+    miner = MachineMiner(session)
     miner.mine_alphas(region=args.region, universe=args.universe)
 
 if __name__ == "__main__":

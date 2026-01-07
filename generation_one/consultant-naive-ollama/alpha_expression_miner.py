@@ -9,6 +9,7 @@ from typing import List, Dict, Tuple
 import time
 import logging
 from itertools import product
+from credential_manager import CredentialManager
 
 # Configure logging at the top of the file
 logging.basicConfig(
@@ -22,11 +23,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class AlphaExpressionMiner:
-    def __init__(self, credentials_path: str):
+    def __init__(self, credentials_path: str = None):
         logger.info("Initializing AlphaExpressionMiner")
-        self.sess = requests.Session()
         self.credentials_path = credentials_path  # Store for reauth
-        self.setup_auth(credentials_path)
+        self.credential_manager = CredentialManager()
+        self.sess = self.setup_auth(credentials_path)
         
         # Define the simulation parameter choices based on the API schema
         self.simulation_choices = {
@@ -63,23 +64,29 @@ class AlphaExpressionMiner:
             'visualization': [False, True]
         }
         
-    def setup_auth(self, credentials_path: str) -> None:
-        """Set up authentication with WorldQuant Brain."""
-        logger.info(f"Loading credentials from {credentials_path}")
-        with open(credentials_path) as f:
-            credentials = json.load(f)
-        
-        username, password = credentials
-        self.sess.auth = HTTPBasicAuth(username, password)
-        
-        logger.info("Authenticating with WorldQuant Brain...")
-        response = self.sess.post('https://api.worldquantbrain.com/authentication')
-        logger.info(f"Authentication response status: {response.status_code}")
-        
-        if response.status_code != 201:
-            logger.error(f"Authentication failed: {response.text}")
-            raise Exception(f"Authentication failed: {response.text}")
-        logger.info("Authentication successful")
+    def setup_auth(self, credentials_path: str = None) -> requests.Session:
+        """Set up authentication with WorldQuant Brain using cookie-based auth."""
+        logger.info("Setting up authentication with WorldQuant Brain...")
+
+        # Try to authenticate using cookie
+        if credentials_path:
+            logger.info(f"Loading credentials from {credentials_path}")
+            from pathlib import Path
+            if self.credential_manager.load_from_file(Path(credentials_path)):
+                if self.credential_manager.validate_credentials():
+                    logger.info("Authentication successful using cookie file")
+                    return self.credential_manager.get_session()
+                else:
+                    logger.error("Cookie validation failed")
+            else:
+                logger.error(f"Failed to load cookie from {credentials_path}")
+
+        # Try auto-authentication (looks for cookie.txt automatically)
+        if self.credential_manager.authenticate(auto_load=True, auto_prompt=False):
+            logger.info("Authentication successful")
+            return self.credential_manager.get_session()
+        else:
+            raise Exception("Authentication failed - cannot proceed without valid credentials")
 
     def remove_alpha_from_hopeful(self, expression: str, hopeful_file: str = "hopeful_alphas.json") -> bool:
         """Remove a mined alpha from hopeful_alphas.json."""
@@ -903,8 +910,8 @@ class AlphaExpressionMiner:
 
 def main():
     parser = argparse.ArgumentParser(description='Mine alpha expression variations')
-    parser.add_argument('--credentials', type=str, default='./credential.txt',
-                      help='Path to credentials file (default: ./credential.txt)')
+    parser.add_argument('--credentials', type=str, default='./cookie.txt',
+                      help='Path to cookie file (default: ./cookie.txt)')
     parser.add_argument('--expression', type=str, required=True,
                       help='Base alpha expression to mine variations from')
     parser.add_argument('--output', type=str, default='mined_expressions.json',

@@ -8,29 +8,41 @@ from typing import List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 from datetime import datetime, timedelta
+from credential_manager import CredentialManager
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
 class ImprovedAlphaSubmitter:
-    def __init__(self, credentials_path: str):
-        self.sess = requests.Session()
+    def __init__(self, credentials_path: str = None):
+        self.credential_manager = CredentialManager()
+        self.sess = self.setup_auth(credentials_path)
         # Set longer timeout for all requests
         self.sess.timeout = (30, 300)  # (connect_timeout, read_timeout)
-        self.setup_auth(credentials_path)
-        
-    def setup_auth(self, credentials_path: str) -> None:
-        """Set up authentication with WorldQuant Brain."""
-        with open(credentials_path) as f:
-            credentials = json.load(f)
-        
-        username, password = credentials
-        self.sess.auth = HTTPBasicAuth(username, password)
-        
-        response = self.sess.post('https://api.worldquantbrain.com/authentication')
-        if response.status_code != 201:
-            raise Exception(f"Authentication failed: {response.text}")
-        logger.info("Successfully authenticated with WorldQuant Brain")
+
+    def setup_auth(self, credentials_path: str = None) -> requests.Session:
+        """Set up authentication with WorldQuant Brain using cookie-based auth."""
+        logger.info("Setting up authentication with WorldQuant Brain...")
+
+        # Try to authenticate using cookie
+        if credentials_path:
+            logger.info(f"Loading credentials from {credentials_path}")
+            from pathlib import Path
+            if self.credential_manager.load_from_file(Path(credentials_path)):
+                if self.credential_manager.validate_credentials():
+                    logger.info("Authentication successful using cookie file")
+                    return self.credential_manager.get_session()
+                else:
+                    logger.error("Cookie validation failed")
+            else:
+                logger.error(f"Failed to load cookie from {credentials_path}")
+
+        # Try auto-authentication (looks for cookie.txt automatically)
+        if self.credential_manager.authenticate(auto_load=True, auto_prompt=False):
+            logger.info("Authentication successful")
+            return self.credential_manager.get_session()
+        else:
+            raise Exception("Authentication failed - cannot proceed without valid credentials")
 
     def check_hopeful_alphas_count(self, min_count: int = 50) -> bool:
         """Check if there are enough hopeful alphas to start submission."""
@@ -472,8 +484,8 @@ class ImprovedAlphaSubmitter:
 
 def main():
     parser = argparse.ArgumentParser(description='Submit successful alphas to WorldQuant Brain with improved timeout handling')
-    parser.add_argument('--credentials', type=str, default='./credential.txt',
-                      help='Path to credentials file (default: ./credential.txt)')
+    parser.add_argument('--credentials', type=str, default='./cookie.txt',
+                      help='Path to cookie file (default: ./cookie.txt)')
     parser.add_argument('--batch-size', type=int, default=3,
                       help='Number of alphas to submit per batch (default: 3)')
     parser.add_argument('--interval-hours', type=int, default=24,

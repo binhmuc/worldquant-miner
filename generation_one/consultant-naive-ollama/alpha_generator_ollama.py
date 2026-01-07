@@ -13,6 +13,7 @@ from threading import Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
 from pydantic import BaseModel
+from credential_manager import CredentialManager
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -66,10 +67,10 @@ class RetryQueue:
             time.sleep(1)  # Prevent busy waiting
 
 class AlphaGenerator:
-    def __init__(self, credentials_path: str, ollama_url: str = "http://localhost:11434", max_concurrent: int = 2):
-        self.sess = requests.Session()
+    def __init__(self, credentials_path: str = None, ollama_url: str = "http://localhost:11434", max_concurrent: int = 2):
         self.credentials_path = credentials_path  # Store path for reauth
-        self.setup_auth(credentials_path)
+        self.credential_manager = CredentialManager()
+        self.sess = self.setup_auth(credentials_path)
         self.ollama_url = ollama_url
         self.results = []
         self.pending_results = {}
@@ -78,7 +79,7 @@ class AlphaGenerator:
         self.executor = ThreadPoolExecutor(max_workers=max_concurrent)  # For concurrent simulations
         self.vram_cleanup_interval = 5  # Cleanup every 5 operations for larger batches
         self.operation_count = 0
-        
+
         # Model downgrade tracking
         self.initial_model = getattr(self, 'model_name', 'deepseek-r1:8b')
         self.error_count = 0
@@ -91,23 +92,30 @@ class AlphaGenerator:
             'phi3:mini'         # Emergency fallback
         ]
         self.current_model_index = 0
-        
-    def setup_auth(self, credentials_path: str) -> None:
-        """Set up authentication with WorldQuant Brain."""
-        logging.info(f"Loading credentials from {credentials_path}")
-        with open(credentials_path) as f:
-            credentials = json.load(f)
-        
-        username, password = credentials
-        self.sess.auth = HTTPBasicAuth(username, password)
-        
-        logging.info("Authenticating with WorldQuant Brain...")
-        response = self.sess.post('https://api.worldquantbrain.com/authentication')
-        logging.info(f"Authentication response status: {response.status_code}")
-        logging.debug(f"Authentication response: {response.text[:500]}...")
-        
-        if response.status_code != 201:
-            raise Exception(f"Authentication failed: {response.text}")
+
+    def setup_auth(self, credentials_path: str = None) -> requests.Session:
+        """Set up authentication with WorldQuant Brain using cookie-based auth."""
+        logging.info("Setting up authentication with WorldQuant Brain...")
+
+        # Try to authenticate using cookie
+        if credentials_path:
+            logging.info(f"Loading credentials from {credentials_path}")
+            from pathlib import Path
+            if self.credential_manager.load_from_file(Path(credentials_path)):
+                if self.credential_manager.validate_credentials():
+                    logging.info("Authentication successful using cookie file")
+                    return self.credential_manager.get_session()
+                else:
+                    logging.error("Cookie validation failed")
+            else:
+                logging.error(f"Failed to load cookie from {credentials_path}")
+
+        # Try auto-authentication (looks for cookie.txt automatically)
+        if self.credential_manager.authenticate(auto_load=True, auto_prompt=False):
+            logging.info("Authentication successful")
+            return self.credential_manager.get_session()
+        else:
+            raise Exception("Authentication failed - cannot proceed without valid credentials")
     
     def cleanup_vram(self):
         """Perform VRAM cleanup by forcing garbage collection and waiting."""
@@ -1087,7 +1095,7 @@ def tokenize_expression(expr):
 
 def generate_alpha():
     """Generate new alpha expression"""
-    generator = AlphaGenerator("./credential.txt", "http://localhost:11434")
+    generator = AlphaGenerator("./cookie.txt", "http://localhost:11434")
     data_fields = generator.get_data_fields()
     operators = generator.get_operators()
     
@@ -1113,8 +1121,8 @@ def generate_alpha():
 
 def main():
     parser = argparse.ArgumentParser(description='Generate and test alpha factors using WorldQuant Brain API with Ollama/FinGPT')
-    parser.add_argument('--credentials', type=str, default='./credential.txt',
-                      help='Path to credentials file (default: ./credential.txt)')
+    parser.add_argument('--credentials', type=str, default='./cookie.txt',
+                      help='Path to cookie file (default: ./cookie.txt)')
     parser.add_argument('--output-dir', type=str, default='./results',
                       help='Directory to save results (default: ./results)')
     parser.add_argument('--batch-size', type=int, default=10,
@@ -1175,6 +1183,7 @@ def main():
                 
                 # Process alpha ideas in smaller batches for simulation
                 total_batch_successful = 0
+                batch_successful = 0  # Initialize to avoid error when no alphas generated
                 for i in range(0, len(alpha_ideas), args.batch_size):
                     batch = alpha_ideas[i:i + args.batch_size]
                     logging.info(f"Processing batch {i//args.batch_size + 1}/{(len(alpha_ideas)-1)//args.batch_size + 1} ({len(batch)} alphas)")

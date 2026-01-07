@@ -55,7 +55,7 @@ def test_orchestrator_initialization():
     logger.info("Testing orchestrator initialization...")
     
     try:
-        orchestrator = AlphaOrchestrator("./credential.txt")
+        orchestrator = AlphaOrchestrator("./cookie.txt")
         logger.info("✓ Orchestrator initialized successfully")
         logger.info(f"✓ Max concurrent simulations: {orchestrator.max_concurrent_simulations}")
         return orchestrator
@@ -97,7 +97,7 @@ def test_command_line_arguments():
     
     for max_concurrent in test_cases:
         try:
-            orchestrator = AlphaOrchestrator("./credential.txt")
+            orchestrator = AlphaOrchestrator("./cookie.txt")
             orchestrator.max_concurrent_simulations = max_concurrent
             logger.info(f"✓ Set max_concurrent to {max_concurrent}")
         except Exception as e:

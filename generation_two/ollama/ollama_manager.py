@@ -491,7 +491,7 @@ class OllamaManager:
                     'role': 'user',
                     'content': prompt
                 })
-                    
+                print(messages)
                 if progress_callback:
                     try:
                         progress_callback(f"Attempt {attempt + 1}/{self.max_retries}...")
@@ -513,6 +513,7 @@ class OllamaManager:
                         pass
                 
                 chat_func = get_ollama_chat_function()
+                print(chat_func)
                 if chat_func:
                     generated_text = call_ollama_library(
                         chat_func, self.model, messages, temperature, max_tokens, self.timeout

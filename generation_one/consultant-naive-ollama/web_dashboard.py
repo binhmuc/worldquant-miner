@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import requests
 import logging
 from typing import Dict, List, Optional
+from pathlib import Path
+from credential_manager import CredentialManager
 
 app = Flask(__name__)
 
@@ -79,7 +81,7 @@ class AlphaDashboard:
         return {"status": "not_responding", "error": "Ollama service not available"}
     
     def get_orchestrator_status(self) -> Dict:
-        """Get orchestrator status from Docker container logs."""
+        """Get orchestrator status from Docker container logs or local process."""
         status = {
             "status": "unknown",
             "last_activity": None,
@@ -87,33 +89,84 @@ class AlphaDashboard:
             "next_mining": None,
             "next_submission": None
         }
-        
+
         try:
-            # Try to get Docker container logs
-            result = subprocess.run([
-                "docker", "logs", "--tail", "50", "naive-ollma-gpu"
-            ], capture_output=True, text=True, timeout=10)
-            
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                if lines:
-                    last_line = lines[-1].strip()
-                    status["last_activity"] = last_line
-                    
-                    # Check for recent activity in Docker logs
-                    for line in reversed(lines[-50:]):
-                        if any(keyword in line for keyword in ["alpha generator", "generating alpha", "Running alpha", "alpha idea"]):
-                            status["status"] = "active"
-                            break
-                        elif any(keyword in line for keyword in ["Error", "Failed", "Exception"]):
-                            status["status"] = "error"
-                            break
-                        elif "ollama" in line.lower() and "started" in line.lower():
-                            status["status"] = "active"
-                            break
-                
-                # Check submission schedule
-                if os.path.exists(self.submission_log_file):
+            # First, check if orchestrator is running as a local process
+            is_running = False
+            try:
+                if os.name == 'nt':  # Windows
+                    result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq python.exe'],
+                                          capture_output=True, text=True, timeout=5)
+                    if 'alpha_orchestrator' in result.stdout:
+                        is_running = True
+                else:  # Linux/Mac
+                    result = subprocess.run(['pgrep', '-f', 'alpha_orchestrator.py'],
+                                          capture_output=True, text=True, timeout=5)
+                    if result.stdout.strip():
+                        is_running = True
+            except:
+                pass
+
+            # Check log file for recent activity
+            log_file = 'alpha_orchestrator.log'
+            if os.path.exists(log_file):
+                try:
+                    # Check file modification time
+                    mtime = os.path.getmtime(log_file)
+                    current_time = time.time()
+                    time_diff = current_time - mtime
+
+                    # Read last 50 lines of log
+                    with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                        recent_lines = lines[-50:] if len(lines) > 50 else lines
+
+                        if recent_lines:
+                            last_line = recent_lines[-1].strip()
+                            status["last_activity"] = last_line
+
+                            # If log was updated in last 5 minutes and process is running
+                            if time_diff < 300 and is_running:
+                                status["status"] = "active"
+                            elif time_diff < 300:
+                                status["status"] = "idle"
+                            elif is_running:
+                                status["status"] = "stale"
+                            else:
+                                status["status"] = "stopped"
+
+                            # Check for errors in recent logs
+                            for line in reversed(recent_lines):
+                                if any(keyword in line for keyword in ["alpha generator", "generating alpha", "Running alpha", "Started alpha"]):
+                                    if status["status"] == "unknown":
+                                        status["status"] = "active"
+                                    break
+                                elif any(keyword in line for keyword in ["Error", "FATAL", "Exception", "Failed"]) and "INFO" not in line:
+                                    status["status"] = "error"
+                                    break
+                except Exception as e:
+                    logger.warning(f"Error reading log file: {e}")
+            elif is_running:
+                status["status"] = "starting"
+
+            # Also try Docker container if local process not found
+            if status["status"] == "unknown":
+                try:
+                    result = subprocess.run([
+                        "docker", "logs", "--tail", "50", "naive-ollma-gpu"
+                    ], capture_output=True, text=True, timeout=10)
+
+                    if result.returncode == 0:
+                        lines = result.stdout.strip().split('\n')
+                        if lines and lines[0]:
+                            status["status"] = "active_docker"
+                            status["last_activity"] = lines[-1].strip() if lines else None
+                except:
+                    pass
+
+            # Check submission schedule (outside Docker check)
+            if os.path.exists(self.submission_log_file):
+                try:
                     with open(self.submission_log_file, 'r') as f:
                         data = json.load(f)
                         last_submission = data.get("last_submission_date")
@@ -122,8 +175,11 @@ class AlphaDashboard:
                             next_submission = last_date + timedelta(days=1)
                             next_submission = next_submission.replace(hour=14, minute=0, second=0, microsecond=0)
                             status["next_submission"] = next_submission.isoformat()
-                
-                # Calculate next mining time (every 6 hours)
+                except Exception as e:
+                    logger.warning(f"Error reading submission log: {e}")
+
+            # Calculate next mining time (every 6 hours)
+            try:
                 now = datetime.now()
                 hours_since_midnight = now.hour + now.minute / 60
                 next_mining_hour = ((int(hours_since_midnight // 6) + 1) * 6) % 24
@@ -131,6 +187,8 @@ class AlphaDashboard:
                 if next_mining <= now:
                     next_mining += timedelta(days=1)
                 status["next_mining"] = next_mining.isoformat()
+            except Exception as e:
+                logger.warning(f"Error calculating next mining time: {e}")
                 
         except Exception as e:
             logger.warning(f"Could not get orchestrator status: {e}")
@@ -138,31 +196,64 @@ class AlphaDashboard:
         return status
     
     def get_worldquant_status(self) -> Dict:
-        """Check WorldQuant Brain API status."""
+        """Check WorldQuant Brain API status using cookie authentication."""
         try:
-            if os.path.exists("credential.txt"):
-                with open("credential.txt", 'r') as f:
-                    credentials = json.load(f)
-                
-                session = requests.Session()
-                session.auth = (credentials[0], credentials[1])
-                response = session.post('https://api.worldquantbrain.com/authentication', timeout=10)
-                
-                if response.status_code == 201:
-                    return {"status": "connected", "message": "Authentication successful"}
+            cookie_file = Path("cookie.txt")
+            if cookie_file.exists():
+                credential_manager = CredentialManager()
+                if credential_manager.load_from_file(cookie_file):
+                    if credential_manager.validate_credentials():
+                        return {"status": "connected", "message": "Authentication successful"}
+                    else:
+                        return {"status": "auth_failed", "message": "Cookie validation failed"}
                 else:
-                    return {"status": "auth_failed", "message": f"Status: {response.status_code}"}
+                    return {"status": "error", "message": "Failed to load cookie"}
+            else:
+                return {"status": "no_credentials", "message": "cookie.txt not found"}
         except Exception as e:
             logger.warning(f"Could not check WorldQuant status: {e}")
-        
+
         return {"status": "unknown", "message": "Could not verify connection"}
     
     def get_recent_activity(self) -> List[Dict]:
-        """Get recent activity from Docker container logs."""
+        """Get recent activity from local log files or Docker container logs."""
         activities = []
-        
+
         try:
-            # Get logs from Docker container
+            # Try local log file first
+            if os.path.exists(self.log_file):
+                with open(self.log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                    for line in lines[-20:]:
+                        line = line.strip()
+                        if line and not line.startswith('---'):
+                            try:
+                                if ' - ' in line:
+                                    parts = line.split(' - ', 2)
+                                    if len(parts) >= 3:
+                                        timestamp_str = parts[0]
+                                        level = parts[1]
+                                        message = parts[2]
+                                        activities.append({
+                                            "timestamp": timestamp_str,
+                                            "message": f"{level} - {message}",
+                                            "type": "info" if "INFO" in level else "error" if "ERROR" in level else "warning" if "WARNING" in level else "debug"
+                                        })
+                                else:
+                                    activities.append({
+                                        "timestamp": datetime.now().isoformat(),
+                                        "message": line,
+                                        "type": "unknown"
+                                    })
+                            except:
+                                activities.append({
+                                    "timestamp": datetime.now().isoformat(),
+                                    "message": line,
+                                    "type": "unknown"
+                                })
+                return activities
+
+            # Fallback: Try Docker container logs
             result = subprocess.run([
                 "docker", "logs", "--tail", "20", "naive-ollma-gpu"
             ], capture_output=True, text=True, timeout=10)
@@ -290,44 +381,45 @@ class AlphaDashboard:
         return stats
     
     def get_logs(self, lines: int = 50) -> List[str]:
-        """Get recent logs from Docker container."""
+        """Get recent logs from local file or Docker container."""
         logs = []
         try:
-            # Get logs from Docker container
+            # Try local log file first
+            if os.path.exists(self.log_file):
+                with open(self.log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines_list = f.readlines()
+                    logs = lines_list[-lines:] if len(lines_list) > lines else lines_list
+                    return [line.strip() for line in logs if line.strip()]
+
+            # Fallback: Try Docker container
             result = subprocess.run([
                 "docker", "logs", "--tail", str(lines), "naive-ollma-gpu"
             ], capture_output=True, text=True, timeout=10)
-            
+
             if result.returncode == 0:
                 logs = result.stdout.strip().split('\n')
-            else:
-                # Fallback to local log file if Docker fails
-                if os.path.exists(self.log_file):
-                    with open(self.log_file, 'r') as f:
-                        lines_list = f.readlines()
-                        logs = lines_list[-lines:] if len(lines_list) > lines else lines_list
         except Exception as e:
             logger.warning(f"Could not read logs: {e}")
-            # Fallback to local log file
-            try:
-                if os.path.exists(self.log_file):
-                    with open(self.log_file, 'r') as f:
-                        lines_list = f.readlines()
-                        logs = lines_list[-lines:] if len(lines_list) > lines else lines_list
-            except:
-                pass
-        
+
         return [line.strip() for line in logs if line.strip()]
     
     def get_alpha_generator_logs(self, lines: int = 50) -> List[str]:
-        """Get alpha generator specific logs."""
+        """Get alpha generator specific logs from local file."""
         logs = []
         try:
-            # Get logs from Docker container and filter for alpha generator content
+            # Try alpha_generator_ollama.log first
+            alpha_log_file = 'alpha_generator_ollama.log'
+            if os.path.exists(alpha_log_file):
+                with open(alpha_log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines_list = f.readlines()
+                    logs = lines_list[-lines:] if len(lines_list) > lines else lines_list
+                    return [line.strip() for line in logs if line.strip()]
+
+            # Fallback: Try Docker container and filter for alpha generator content
             result = subprocess.run([
                 "docker", "logs", "--tail", str(lines * 2), "naive-ollma-gpu"
             ], capture_output=True, text=True, timeout=10)
-            
+
             if result.returncode == 0:
                 all_logs = result.stdout.strip().split('\n')
                 # Filter for alpha generator related logs
@@ -355,9 +447,9 @@ class AlphaDashboard:
         """Trigger manual alpha expression mining."""
         try:
             result = subprocess.run([
-                "python", "alpha_orchestrator.py", 
+                "python", "alpha_orchestrator.py",
                 "--mode", "miner",
-                "--credentials", "./credential.txt"
+                "--credentials", "./cookie.txt"
             ], capture_output=True, text=True, timeout=300)
             
             return {
@@ -372,9 +464,9 @@ class AlphaDashboard:
         """Trigger manual alpha submission."""
         try:
             result = subprocess.run([
-                "python", "alpha_orchestrator.py", 
+                "python", "alpha_orchestrator.py",
                 "--mode", "submitter",
-                "--credentials", "./credential.txt",
+                "--credentials", "./cookie.txt",
                 "--batch-size", "3"
             ], capture_output=True, text=True, timeout=600)
             
@@ -390,9 +482,9 @@ class AlphaDashboard:
         """Trigger manual alpha generation."""
         try:
             result = subprocess.run([
-                "python", "alpha_orchestrator.py", 
+                "python", "alpha_orchestrator.py",
                 "--mode", "generator",
-                "--credentials", "./credential.txt",
+                "--credentials", "./cookie.txt",
                 "--batch-size", "1"
             ], capture_output=True, text=True, timeout=300)
             

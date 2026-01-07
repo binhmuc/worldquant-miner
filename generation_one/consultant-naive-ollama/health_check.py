@@ -44,12 +44,12 @@ def check_worldquant_credentials():
     """Check if WorldQuant Brain credentials are valid"""
     print("🔍 Checking WorldQuant Brain credentials...")
     
-    if not os.path.exists("credential.txt"):
-        print("❌ credential.txt not found")
+    if not os.path.exists("cookie.txt"):
+        print("❌ cookie.txt not found")
         return False
     
     try:
-        with open("credential.txt") as f:
+        with open("cookie.txt") as f:
             credentials = json.load(f)
         
         if not isinstance(credentials, list) or len(credentials) != 2:
@@ -73,7 +73,7 @@ def check_worldquant_credentials():
             return False
             
     except json.JSONDecodeError:
-        print("❌ Invalid JSON in credential.txt")
+        print("❌ Invalid JSON in cookie.txt")
         return False
     except Exception as e:
         print(f"❌ Error checking credentials: {e}")

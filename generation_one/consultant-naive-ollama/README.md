@@ -39,7 +39,7 @@ A sophisticated alpha factor generation system that uses Ollama with financial l
                         │   Logs Storage  │
                         └─────────────────┘
 ```
-
+`
 ## 🚀 Quick Start
 
 ### 1. Setup Credentials
